@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang='en-US'>
+
+<!-- https://www.reddit.com/r/shortcuts/comments/9p2vix/cryptokit_a_cryptography_shortcut/ -->
+<!-- https://support.apple.com/guide/shortcuts/request-your-first-api-apd58d46713f/ios -->
+<!-- https://github.com/brix/crypto-js#usage-without-requirejs -->
+<!-- https://docs.aws.amazon.com/sdk-for-javascript/v2/developer-guide/s3-browser-examples.html -->
+<!-- https://stackoverflow.com/questions/62578705/decrypt-openssl-aes-256-cbc-in-browser-cryptojs/62581296#62581296 -->
+<!-- https://github.com/brix/crypto-js/issues/274#issuecomment-600039187 -->
+<!-- https://stackoverflow.com/questions/47919985/how-to-upload-file-to-aws-s3-using-xmlhttprequest -->
+<!-- https://stackoverflow.com/questions/1496453/uploading-to-amazon-s3-using-curl-libcurl/26236508#26236508 -->
+
+<head>
+  <meta charset='utf-8' />
+  <meta name='viewport' content='width=device-width' />
+  <title>ios-backup-contacts-with-workflow</title>
+  <script src='https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js'
+    integrity='sha512-E8QSvWZ0eCLGk4km3hxSsNmGWbLtSCSUcewDQPQWZF6pEU8GlT8a5fF32wOl1i8ftdMhssTrF/OhyGWwonTcXA=='
+    crossorigin='anonymous' referrerpolicy='no-referrer'></script>
+</head>
+
+<body>
+  <script type='text/javascript'>
+
+    /* Converts a cryptjs WordArray to native Uint8Array */
+    function CryptJsWordArrayToUint8Array(wordArray) {
+      const l = wordArray.sigBytes;
+      const words = wordArray.words;
+      const result = new Uint8Array(l);
+      var i = 0 /*dst*/, j = 0 /*src*/;
+      while (true) {
+        // here i is a multiple of 4
+        if (i == l)
+          break;
+        var w = words[j++];
+        result[i++] = (w & 0xff000000) >>> 24;
+        if (i == l)
+          break;
+        result[i++] = (w & 0x00ff0000) >>> 16;
+        if (i == l)
+          break;
+        result[i++] = (w & 0x0000ff00) >>> 8;
+        if (i == l)
+          break;
+        result[i++] = (w & 0x000000ff);
+      }
+      return result;
+    }
+
+    function openssl_aes(message, password) {
+      // openssl_aes('my message', 'password')
+      // echo U2FsdGVkX1/xJ1fa4aU7/y5NBBdDgQUVnbbeSesheGE= | openssl aes-256-cbc -d -a -pbkdf2
+      var prefixWA = CryptoJS.enc.Utf8.parse('Salted__');
+      var saltWA = CryptoJS.lib.WordArray.random(8);
+      var keyIvWA = CryptoJS.PBKDF2(
+        password,
+        saltWA,
+        {
+          keySize: (32 + 16) / 4,
+          iterations: 10000,
+          hasher: CryptoJS.algo.SHA256
+        }
+      );
+
+      var keyWA = CryptoJS.lib.WordArray.create(keyIvWA.words.slice(0, 32 / 4));
+      var ivWA = CryptoJS.lib.WordArray.create(keyIvWA.words.slice(32 / 4, (32 + 16) / 4));
+
+      var encrypted = CryptoJS.AES.encrypt(
+        message,
+        keyWA,
+        {
+          mode: CryptoJS.mode.CBC,
+          padding: CryptoJS.pad.Pkcs7,
+          iv: ivWA,
+        },
+      );
+
+      return prefixWA.concat(saltWA).concat(encrypted.ciphertext);
+    }
+
+    var config = {
+      password: CUSTOM_PASSWORD,
+      s3: {
+        bucketName: S3_BUCKET_NAME,
+        accessKeyId: S3_ACCESS_KEY_ID,
+        secretAccessKey: S3_SECRET_ACCESS_KEY,
+        key: S3_KEY,
+      }
+    };
+
+    var data = CUSTOM_DATA;
+
+    var encrypted = openssl_aes(CryptoJS.enc.Base64.parse(data), config.password);
+    var body = CryptJsWordArrayToUint8Array(encrypted);
+
+    var resource = `/${config.s3.bucketName}/${config.s3.key}`;
+    var contentType = 'application/octet-stream';
+    var dateValue = (new Date).toUTCString();
+    var stringToSign = `PUT\n\n${contentType}\n\nx-amz-date:${dateValue}\n${resource}`;
+    var signature = CryptoJS.HmacSHA1(stringToSign, config.s3.secretAccessKey).toString(CryptoJS.enc.Base64);
+
+    const xhr = new XMLHttpRequest();
+
+    const handleEvent = function (e) {
+      if (xhr.status === 200 || xhr.status === 201) {
+        document.write('ok');
+      } else {
+        document.write(xhr.status + '<br>' + this.responseText);
+      }
+    }
+
+    xhr.addEventListener('load', handleEvent);
+    xhr.addEventListener('error', handleEvent);
+    xhr.open('PUT', `https://${config.s3.bucketName}.s3.amazonaws.com/${config.s3.key}`, false);
+    xhr.setRequestHeader('x-amz-date', dateValue);
+    xhr.setRequestHeader('Content-type', contentType);
+    xhr.setRequestHeader('Authorization', `AWS ${config.s3.accessKeyId}:${signature}`);
+    xhr.send(body);
+
+  </script>
+</body>
+
+</html>
